@@ -1,0 +1,168 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Heart QR Maker</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Great+Vibes&family=Poppins:wght@400;500&display=swap" rel="stylesheet">
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{min-height:100vh;background:radial-gradient(120% 80% at 50% 110%,#3d0b2c,#16061c 50%,#07040d);color:#fff3f7;font-family:'Poppins',sans-serif;
+  display:flex;flex-direction:column;align-items:center;gap:18px;padding:32px 16px 48px}
+h1{font-family:'Great Vibes',cursive;font-weight:400;font-size:52px;text-shadow:0 0 20px rgba(255,77,141,.6)}
+.row{display:flex;flex-direction:column;gap:10px;width:min(520px,100%)}
+label{font-size:12px;letter-spacing:.2em;text-transform:uppercase;color:#ffc2d6}
+input{width:100%;padding:14px 16px;border-radius:12px;border:1px solid rgba(255,194,214,.4);background:rgba(255,255,255,.07);color:#fff;font:15px 'Poppins',sans-serif}
+.btns{display:flex;gap:10px;flex-wrap:wrap;justify-content:center}
+button,a.btn{appearance:none;border:1px solid rgba(255,194,214,.5);background:rgba(255,77,141,.18);color:#fff;font:500 13px 'Poppins';letter-spacing:.14em;
+  text-transform:uppercase;padding:14px 24px;border-radius:999px;cursor:pointer;text-decoration:none;min-height:48px}
+canvas{width:min(520px,100%);height:auto;border-radius:20px;box-shadow:0 30px 80px rgba(0,0,0,.6)}
+.note{font-size:13px;color:rgba(255,220,232,.7);max-width:520px;text-align:center;line-height:1.6}
+</style>
+</head>
+<body>
+<h1>Heart QR</h1>
+<div class="row">
+  <label for="url">Link to the birthday website</label>
+  <input id="url" placeholder="https://your-site.netlify.app" autocomplete="off">
+  <label for="cap">Caption under the heart</label>
+  <input id="cap" value="scan me, Jana ♥">
+  <label for="style">Style</label>
+  <select id="style" style="padding:14px 16px;border-radius:12px;border:1px solid rgba(255,194,214,.4);background:#1d0b1e;color:#fff;font:15px 'Poppins',sans-serif">
+    <option value="solid">Solid heart (whole heart is the code)</option>
+    <option value="dots">Dotted heart with white center</option>
+  </select>
+</div>
+<div class="btns">
+  <button id="gen">Make the heart</button>
+  <a class="btn" id="dl" download="jana-heart-qr.png">Download PNG</a>
+</div>
+<canvas id="qr" width="1200" height="1400"></canvas>
+<p class="note">Before you print it, scan it with your own phone to check it works. Print it at least 6 cm wide.</p>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcode-generator/1.4.4/qrcode.min.js"></script>
+<script>
+const cv = document.getElementById('qr'), g = cv.getContext('2d');
+const urlIn = document.getElementById('url'), capIn = document.getElementById('cap');
+const HEART = new Path2D("M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z");
+
+const params = new URLSearchParams(location.search);
+if (params.get('url')) urlIn.value = params.get('url');
+else if (location.protocol.startsWith('http') && !/localhost|127\.0\.0\.1/.test(location.hostname)) urlIn.value = new URL('./', location.href).href;
+
+// seeded random so the same link always makes the same heart
+function rng(seed) { let s = seed >>> 0 || 1; return () => (s = (s * 1664525 + 1013904223) >>> 0) / 4294967296; }
+
+function insideHeart(c, r, G) {
+  const x = (c + 0.5) / G * 2.4 - 1.2, y = 1.3 - (r + 0.5) / G * 2.4;
+  const a = x * x + y * y - 1;
+  return a * a * a - x * x * y * y * y <= 0;
+}
+
+function layout(n, qz = 4) {
+  const q = n + qz * 2; // QR plus its quiet zone on every side
+  for (let G = q + 2; G < q * 4; G++) {
+    const c0 = Math.floor((G - q) / 2), span = Math.floor(G * 0.2);
+    for (let off = 0; off <= span; off++) for (const sgn of [1, -1]) {
+      const r0 = Math.floor((G - q) / 2) + off * sgn;
+      if (r0 < 0 || r0 + q > G) continue;
+      let ok = true;
+      for (let i = 0; i < q && ok; i++)
+        if (!insideHeart(c0 + i, r0, G) || !insideHeart(c0 + i, r0 + q - 1, G) || !insideHeart(c0, r0 + i, G) || !insideHeart(c0 + q - 1, r0 + i, G)) ok = false;
+      if (ok) return { G, c0, r0, q };
+    }
+  }
+}
+
+function rrect(x, y, w, h, r) { g.beginPath(); g.roundRect ? g.roundRect(x, y, w, h, r) : g.rect(x, y, w, h); g.fill(); }
+
+// Solid style: the whole heart is square modules in one color, like a QR shaped as a heart.
+async function renderSolid(text) {
+  const qr = qrcode(0, 'H'); qr.addData(text); qr.make();
+  const n = qr.getModuleCount();
+  const QZ = 1; // thin clear ring so scanners can still find the code's edges
+  const { G, c0, r0, q } = layout(n, QZ);
+  const S = 1200, cell = S * 0.86 / G, ox = (S - G * cell) / 2, oy = 60;
+  cv.height = Math.ceil(oy + G * cell + 220);
+  g.fillStyle = '#ffffff'; g.fillRect(0, 0, S, cv.height);
+
+  let seed = 7; for (const ch of text) seed = (seed * 31 + ch.charCodeAt(0)) | 0;
+  const R = rng(seed);
+  const qx0 = c0 + QZ, qy0 = r0 + QZ;
+  const ink = '#d6336c';
+  g.fillStyle = ink;
+  const sq = (c, r) => g.fillRect(ox + c * cell, oy + r * cell, cell + 0.6, cell + 0.6);
+  for (let r = 0; r < G; r++) for (let c = 0; c < G; c++) {
+    if (!insideHeart(c, r, G)) continue;
+    const inQuiet = c >= c0 && c < c0 + q && r >= r0 && r < r0 + q;
+    const inQR = c >= qx0 && c < qx0 + n && r >= qy0 && r < qy0 + n;
+    if (inQR) { if (qr.isDark(r - qy0, c - qx0)) sq(c, r); }
+    else if (!inQuiet && R() < 0.5) sq(c, r);
+  }
+
+  try { await document.fonts.load('100px "Great Vibes"'); } catch (e) {}
+  g.fillStyle = '#b0174f'; g.textAlign = 'center'; g.textBaseline = 'middle';
+  g.font = '110px "Great Vibes", cursive';
+  g.fillText(capIn.value, S / 2, oy + G * cell + 110);
+  document.getElementById('dl').href = cv.toDataURL('image/png');
+}
+
+async function render() {
+  const text = urlIn.value.trim() || 'https://example.com';
+  if (document.getElementById('style').value === 'solid') return renderSolid(text);
+  const qr = qrcode(0, 'H'); qr.addData(text); qr.make();
+  const n = qr.getModuleCount();
+  const { G, c0, r0, q } = layout(n);
+  const S = 1200, cell = S * 0.9 / G, ox = (S - G * cell) / 2, oy = 70;
+  cv.height = Math.ceil(oy + G * cell + 230);
+
+  // card background
+  const bgG = g.createLinearGradient(0, 0, 0, cv.height);
+  bgG.addColorStop(0, '#fff6f9'); bgG.addColorStop(1, '#ffe4ee');
+  g.fillStyle = bgG; g.fillRect(0, 0, S, cv.height);
+
+  // decorative dots that form the heart
+  let seed = 0; for (const ch of text) seed = (seed * 31 + ch.charCodeAt(0)) | 0;
+  const R = rng(seed), cols = ['#ff4d8d', '#ff6f9f', '#ff8fb6', '#ffb3cd', '#e23a78'];
+  for (let r = 0; r < G; r++) for (let c = 0; c < G; c++) {
+    if (!insideHeart(c, r, G)) continue;
+    if (c >= c0 && c < c0 + q && r >= r0 && r < r0 + q) continue;
+    if (R() > 0.62) continue;
+    g.fillStyle = cols[(R() * cols.length) | 0];
+    const x = ox + (c + 0.5) * cell, y = oy + (r + 0.5) * cell;
+    if (R() < 0.12) { g.save(); g.translate(x, y); g.scale(cell / 24 * 0.95, cell / 24 * 0.95); g.translate(-12, -12); g.fill(HEART); g.restore(); }
+    else { g.beginPath(); g.arc(x, y, cell * rand(R, 0.28, 0.42), 0, Math.PI * 2); g.fill(); }
+  }
+
+  // QR panel with quiet zone
+  g.fillStyle = '#ffffff';
+  rrect(ox + c0 * cell, oy + r0 * cell, q * cell, q * cell, cell * 1.4);
+  g.fillStyle = '#3d0a22';
+  const qx = ox + (c0 + 4) * cell, qy = oy + (r0 + 4) * cell;
+  for (let r = 0; r < n; r++) for (let c = 0; c < n; c++)
+    if (qr.isDark(r, c)) g.fillRect(qx + c * cell, qy + r * cell, cell + 0.6, cell + 0.6);
+
+  // small heart in the middle (error correction level H covers it)
+  const hs = n * cell * 0.16, hx = qx + n * cell / 2, hy = qy + n * cell / 2;
+  g.fillStyle = '#ffffff'; rrect(hx - hs * 0.68, hy - hs * 0.66, hs * 1.36, hs * 1.3, hs * 0.3);
+  g.fillStyle = '#ff4d8d'; g.save(); g.translate(hx, hy); g.scale(hs / 24, hs / 24); g.translate(-12, -12.5); g.fill(HEART); g.restore();
+
+  // caption
+  try { await document.fonts.load('100px "Great Vibes"'); } catch (e) {}
+  g.fillStyle = '#b0174f'; g.textAlign = 'center'; g.textBaseline = 'middle';
+  g.font = '110px "Great Vibes", cursive';
+  g.fillText(capIn.value, S / 2, oy + G * cell + 115);
+
+  document.getElementById('dl').href = cv.toDataURL('image/png');
+}
+function rand(R, a, b) { return a + R() * (b - a); }
+
+document.getElementById('gen').addEventListener('click', render);
+capIn.addEventListener('input', render);
+document.getElementById('style').addEventListener('change', render);
+render();
+</script>
+</body>
+</html>
